@@ -1,6 +1,6 @@
-import { collectionConfigs } from './config/collections.js';
 import { AIService } from './services/aiService.js';
 import { DBService } from './services/dbService.js';
+import { collectionConfigs } from './config/collections.js';
 
 export class DataGenerator {
     constructor(dbConfig = {}, aiConfig = {}) {
@@ -12,41 +12,42 @@ export class DataGenerator {
         await this.dbService.authenticate(email, password);
     }
 
-    async generateAndStore(collectionKey) {
-        const config = collectionConfigs[collectionKey];
+    async generateAndStore(collectionName, configOverride, brandIds, categoryIds) {
+        const config = configOverride || collectionConfigs[collectionName];
         if (!config) {
-            throw new Error(`No configuration found for collection: ${collectionKey}`);
+            throw new Error(`Collection ${collectionName} not found in configuration.`);
         }
 
-        try {
-            // Generate data using AI
-            console.log(`Generating data for collection: ${collectionKey}`);
-            const generatedData = await this.aiService.generateData(config);
-            console.log(`Generated Data: ${JSON.stringify(generatedData)}`);
-
-            // Store in database
-            const { results, errors } = await this.dbService.createRecords(
-                config.name,
-                generatedData
-            );
-
-            if (errors.length > 0) {
-                console.error(`Errors encountered while storing data:`, errors);
+        // Check for foreign keys and ensure referenced data exists
+        if (config.foreignKeys && config.foreignKeys.length > 0) {
+            for (const fk of config.foreignKeys) {
+                const referencedCollection = fk.relatedCollection;
+                const referencedData = await this.dbService.getFullList(referencedCollection);
+                console.log(`Referenced data for collection ${referencedCollection}:`, referencedData); // Debug log
+                if (!referencedData || referencedData.length === 0) {
+                    throw new Error(`Referenced collection ${referencedCollection} has no data.`);
+                }
             }
-
-            return {
-                success: results.length > 0,
-                resultsCount: results.length,
-                errorCount: errors.length,
-                errors: errors.length > 0 ? errors : null
-            };
-        } catch (error) {
-            console.error(`Failed to generate and store data for collection ${collectionKey}:`, error);
-            throw new Error(`Failed to generate and store data: ${error.message}`);
         }
+
+        const data = await this.aiService.generateData(config);
+
+        // Map foreign keys
+        const mappedData = data.map(record => {
+            if (record.category) {
+                record.category = categoryIds[Math.floor(Math.random() * categoryIds.length)];
+            }
+            if (record.brand) {
+                record.brand = brandIds[Math.floor(Math.random() * brandIds.length)];
+            }
+            return record;
+        });
+
+        const result = await this.dbService.createRecords(collectionName, mappedData);
+        return result;
     }
 }
-// Usage example:
+
 async function main() {
     try {
         const generator = new DataGenerator(
@@ -59,14 +60,42 @@ async function main() {
 
         await generator.initialize('m@m.com', '1234512345');
 
-        // Iterate over all collections and generate/store them
-        for (const [collectionName, config] of Object.entries(collectionConfigs)) {
+        // Fetch and store IDs for referenced collections
+        const brandIds = await fetchCollectionIds(generator.dbService, 'brands');
+        const categoryIds = await fetchCollectionIds(generator.dbService, 'categories');
+
+        // Separate collections by foreign keys
+        const collectionsWithoutForeignKeys = [];
+        const collectionsWithForeignKeys = [];
+
+        Object.entries(collectionConfigs).forEach(([collectionName, config]) => {
+            if (config.foreignKeys && config.foreignKeys.length > 0) {
+                collectionsWithForeignKeys.push({ name: collectionName, config, brandIds, categoryIds });
+            } else {
+                collectionsWithoutForeignKeys.push(collectionName);
+            }
+        });
+
+        // Generate and store data for collections without foreign keys first
+        for (const collectionName of collectionsWithoutForeignKeys) {
             const result = await generator.generateAndStore(collectionName);
-            console.log(`${config.name} generation result:`, JSON.stringify(result, null, 2));
+            console.log(`${collectionConfigs[collectionName].name} generation result:`, JSON.stringify(result, null, 2));
+        }
+
+        // Generate and store data for collections with foreign keys
+        for (const { name, config, brandIds, categoryIds } of collectionsWithForeignKeys) {
+            const result = await generator.generateAndStore(name, config, brandIds, categoryIds);
+            console.log(`${collectionConfigs[name].name} generation result:`, JSON.stringify(result, null, 2));
         }
     } catch (error) {
         console.error('Error in data generation:', error);
     }
+}
+
+async function fetchCollectionIds(dbService, collectionName) {
+    const records = await dbService.getFullList(collectionName);
+    console.log(`Fetched records for collection ${collectionName}:`, records); // Debug log
+    return records.map(record => record.id);
 }
 
 main();
