@@ -4,13 +4,13 @@ export const collectionConfigs = {
     brands: {
         name: 'brands',
         fields: ['brand_name', 'is_active'],
-        prompt: 'Generate sample data for a brand database. Include fields: brand_name (name of the brand) and is_active (boolean status) for DEFAULT_SAMPLE_SIZE brands.',
+        prompt: `Generate sample data for a brand database. Include fields: brand_name (name of the brand) and is_active (boolean status) for ${DEFAULT_SAMPLE_SIZE} brands.`,
         sampleSize: DEFAULT_SAMPLE_SIZE
     },
     categories: {
         name: 'categories',
         fields: ['parent', 'name', 'is_active'],
-        prompt: 'Generate sample data for a category database. Include fields: parent (id of parent category), name (category name), and is_active (boolean status) for DEFAULT_SAMPLE_SIZE categories.',
+        prompt: `Generate sample data for a category database. Include fields: parent (id of parent category), name (category name), and is_active (boolean status) for ${DEFAULT_SAMPLE_SIZE} categories.`,
         sampleSize: DEFAULT_SAMPLE_SIZE
     },
     products: {
@@ -20,8 +20,7 @@ export const collectionConfigs = {
             { field: 'category', relatedCollection: 'categories' },
             { field: 'brand', relatedCollection: 'brands' }
         ],
-        prompt: 'Generate sample data for products. Include fields: name, description, base_price (numeric), category (category ID), brand (brand ID), images (array of strings), and is_active (boolean) for DEFAULT_SAMPLE_SIZE products.',
+        prompt: `Generate sample data for products. Include fields: name, description, base_price (numeric), category (category ID), brand (brand ID), images (array of strings), and is_active (boolean) for ${DEFAULT_SAMPLE_SIZE} products.`,
         sampleSize: DEFAULT_SAMPLE_SIZE
-    },
+    }
 };
-
