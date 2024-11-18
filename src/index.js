@@ -2,128 +2,168 @@ import { AIService } from './services/aiService.js';
 import { DBService } from './services/dbService.js';
 import { collectionConfigs } from './config/collections.js';
 
+
 export class DataGenerator {
-    constructor(dbConfig = {}, aiConfig = {}) {
-        this.dbService = new DBService(dbConfig.url);
-        this.aiService = new AIService(aiConfig.baseURL, aiConfig.apiKey);
+    constructor() {
+        this.aiService = new AIService();
+        this.dbService = new DBService();
+        this.generatedData = new Map();
     }
 
-    async initialize(email, password) {
-        await this.dbService.authenticate(email, password);
-    }
+    sortCollectionsByDependency() {
+        const sorted = [];
+        const visited = new Set();
 
-    async generateAndStore(collectionName, configOverride, brandIds, categoryIds) {
-        const config = configOverride || collectionConfigs[collectionName];
-        if (!config) {
-            throw new Error(`Collection ${collectionName} not found in configuration.`);
-        }
+        const hasForeignKeys = (config) => {
+            return config.fields.some(field =>
+                typeof field === 'object' && field.type === 'foreignKey'
+            );
+        };
 
-        // Check for foreign keys and ensure referenced data exists
-        if (config.foreignKeys && config.foreignKeys.length > 0) {
-            for (const fk of config.foreignKeys) {
-                const referencedCollection = fk.relatedCollection;
-                const referencedData = await this.dbService.getFullList(referencedCollection);
-                console.log(`Referenced data for collection ${referencedCollection}:`, referencedData); // Debug log
-                if (!referencedData || referencedData.length === 0) {
-                    throw new Error(`Referenced collection ${referencedCollection} has no data.`);
-                }
+        // Add collections without foreign keys first
+        Object.values(collectionConfigs).forEach(config => {
+            if (!hasForeignKeys(config)) {
+                sorted.push(config);
+                visited.add(config.name);
             }
-        }
-
-        const data = await this.aiService.generateData(config);
-
-        // Map foreign keys
-        const mappedData = data.map(record => {
-            if (record.category) {
-                record.category = categoryIds[Math.floor(Math.random() * categoryIds.length)];
-            }
-            if (record.brand) {
-                record.brand = brandIds[Math.floor(Math.random() * brandIds.length)];
-            }
-            return record;
         });
 
-        const result = await this.dbService.createRecords(collectionName, mappedData);
-        return result;
-    }
-}
+        // Add collections with foreign keys
+        while (sorted.length < Object.keys(collectionConfigs).length) {
+            Object.values(collectionConfigs).forEach(config => {
+                if (visited.has(config.name)) return;
 
-async function main() {
-    try {
-        const generator = new DataGenerator(
-            { url: 'http://127.0.0.1:8090' },
-            {
-                baseURL: 'http://localhost:11434/v1/',
-                apiKey: 'ollama'
-            }
+                const foreignKeyFields = config.fields.filter(field =>
+                    typeof field === 'object' && field.type === 'foreignKey'
+                );
+
+                const allDependenciesMet = foreignKeyFields.every(field =>
+                    visited.has(field.relatedCollection)
+                );
+
+                if (allDependenciesMet) {
+                    sorted.push(config);
+                    visited.add(config.name);
+                }
+            });
+        }
+
+        return sorted;
+    }
+
+    enhancePromptWithContext(config) {
+        let enhancedPrompt = config.prompt;
+
+        const foreignKeyFields = config.fields.filter(field =>
+            typeof field === 'object' && field.type === 'foreignKey'
         );
 
-        await generator.initialize('m@m.com', '1234512345');
+        if (foreignKeyFields.length > 0) {
+            foreignKeyFields.forEach(field => {
+                const relatedData = this.generatedData.get(field.relatedCollection);
+                if (relatedData) {
+                    enhancedPrompt += `\n\nAvailable ${field.relatedCollection}:\n`;
+                    enhancedPrompt += JSON.stringify(relatedData.map(item => ({
+                        id: item.id,
+                        name: item.name || item.brand_name
+                    })), null, 2);
+                }
+            });
+        }
 
-        // Fetch and store IDs for referenced collections
-        const brandIds = await fetchCollectionIds(generator.dbService, 'brands');
-        const categoryIds = await fetchCollectionIds(generator.dbService, 'categories');
+        return enhancedPrompt;
+    }
 
-        // Separate collections by foreign keys
-        const collectionsWithoutForeignKeys = [];
-        const collectionsWithForeignKeys = [];
+    validateFields(data, fields) {
+        return data.map(item => {
+            const validatedItem = {};
+            fields.forEach(fieldConfig => {
+                const fieldName = typeof fieldConfig === 'string' ?
+                    fieldConfig :
+                    fieldConfig.field;
 
-        Object.entries(collectionConfigs).forEach(([collectionName, config]) => {
-            if (config.foreignKeys && config.foreignKeys.length > 0) {
-                collectionsWithForeignKeys.push({ name: collectionName, config, brandIds, categoryIds });
-            } else {
-                collectionsWithoutForeignKeys.push(collectionName);
-            }
+                const fieldType = typeof fieldConfig === 'string' ?
+                    'string' :
+                    fieldConfig.type;
+
+                let value = item[fieldName];
+
+                switch (fieldType) {
+                    case 'numeric':
+                        value = Number(value);
+                        if (isNaN(value)) throw new Error(`Invalid numeric value for field ${fieldName}`);
+                        break;
+                    case 'boolean':
+                        if (typeof value !== 'boolean') {
+                            value = String(value).toLowerCase() === 'true';
+                        }
+                        break;
+                    case 'foreignKey':
+                        const relatedData = this.generatedData.get(fieldConfig.relatedCollection);
+                        if (!relatedData || !relatedData.find(r => r.id === value)) {
+                            const randomRelated = relatedData[Math.floor(Math.random() * relatedData.length)];
+                            value = randomRelated.id;
+                        }
+                        break;
+                    case 'null':
+                        value = null;
+                        break;
+                }
+
+                validatedItem[fieldName] = value;
+            });
+            return validatedItem;
         });
+    }
 
-        // Generate and store data for collections without foreign keys first
-        for (const collectionName of collectionsWithoutForeignKeys) {
-            const result = await generator.generateAndStore(collectionName);
-            console.log(`${collectionConfigs[collectionName].name} generation result:`, JSON.stringify(result, null, 2));
-        }
+    async generateAndStoreData() {
+        try {
+            await this.dbService.authenticate('m@m.com', '1234512345');
 
-        // Generate and store data for collections with foreign keys
-        for (const { name, config, brandIds, categoryIds } of collectionsWithForeignKeys) {
-            const result = await generator.generateAndStore(name, config, brandIds, categoryIds);
-            console.log(`${collectionConfigs[name].name} generation result:`, JSON.stringify(result, null, 2));
+            const sortedCollections = this.sortCollectionsByDependency();
+            console.log('Generation order:', sortedCollections.map(c => c.name));
+
+            for (const config of sortedCollections) {
+                console.log(`\nProcessing collection: ${config.name}`);
+
+                const enhancedConfig = {
+                    ...config,
+                    prompt: this.enhancePromptWithContext(config)
+                };
+
+                const generatedData = await this.aiService.generateData(enhancedConfig);
+                const validatedData = this.validateFields(generatedData, config.fields);
+
+                const { results, errors } = await this.dbService.createRecords(config.name, validatedData);
+                this.generatedData.set(config.name, results);
+
+                console.log(`✓ Generated ${results.length} records for ${config.name}`);
+                if (errors.length > 0) {
+                    console.error(`× Errors:`, errors);
+                }
+            }
+
+            return {
+                success: true,
+                data: Object.fromEntries(this.generatedData)
+            };
+
+        } catch (error) {
+            console.error('Data generation failed:', error);
+            return {
+                success: false,
+                error: error.message
+            };
         }
-    } catch (error) {
-        console.error('Error in data generation:', error);
     }
 }
 
-async function fetchCollectionIds(dbService, collectionName) {
-    const records = await dbService.getFullList(collectionName);
-    console.log(`Fetched records for collection ${collectionName}:`, records); // Debug log
-    return records.map(record => record.id);
+// Example usage
+async function main() {
+    const generator = new DataGenerator();
+    const result = await generator.generateAndStoreData();
+    console.log('Generation complete:', result);
 }
 
-main();
-
-// Usage example:
-// async function main() {
-//     try {
-//         const generator = new DataGenerator(
-//             { url: 'http://127.0.0.1:8090' },
-//             {
-//                 baseURL: 'http://localhost:11434/v1/',
-//                 apiKey: 'ollama'
-//             }
-//         );
-
-//         await generator.initialize('m@m.com', '1234512345');
-
-//         // Generate and store languages
-//         const languagesResult = await generator.generateAndStore('languages');
-//         console.log('Languages generation result:', JSON.stringify(languagesResult, null, 2));
-
-//         // Generate and store currencies
-//         const currenciesResult = await generator.generateAndStore('currencies');
-//         console.log('Currencies generation result:', JSON.stringify(currenciesResult, null, 2));
-//     } catch (error) {
-//         console.error('Error in data generation:', error);
-//     }
-// }
-
-// main();
-
+// Run if this is the main module
+    main().catch(console.error);

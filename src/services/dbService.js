@@ -33,7 +33,6 @@ export class DBService {
     async getFullList(collectionName, options = {}) {
         try {
             const records = await this.client.collection(collectionName).getFullList(options);
-            console.log(`Fetched records for collection ${collectionName}:`, records);
             return records;
         } catch (error) {
             throw new Error(`Failed to fetch records from collection ${collectionName}: ${error.message}`);
