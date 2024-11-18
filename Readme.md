@@ -71,6 +71,7 @@ Navigate to the PocketBase UI, click on API(Preview), and proceed to the View se
   "is_active": true
 }
 Using the structure above we will use LLM to transform it into the following format:
+```javascript
 
 brands: {
     name: 'brands',
@@ -82,6 +83,7 @@ brands: {
     sampleSize: DEFAULT_SAMPLE_SIZE
 },
 
+```
 You will find the prompt in prompt.md. Once you have the formatted configuration, integrate it into the collectionConfigs array within the collections.js file.
 Define your collections in `collections.js`:
 
